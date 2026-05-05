@@ -1,110 +1,91 @@
 import os
 from dotenv import load_dotenv
 
+from fastapi import FastAPI
+from pydantic import BaseModel
+
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableBranch
 
-# Load environment variables
+# Load env
 load_dotenv()
 
-# Initialize LLM
+app = FastAPI()
+
+# LLM
 llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0.7
 )
 
-# ---------------------------
-# 1. Router (Classifier)
-# ---------------------------
+# ---------------- Router ----------------
 router_prompt = PromptTemplate.from_template(
     """
-Classify the following topic into one of two categories:
+Classify topic as:
 - tech
 - general
 
 Topic: {topic}
 
-Only return one word: tech or general.
+Return only one word.
 """
 )
 
 router_chain = router_prompt | llm | StrOutputParser()
 
-# ---------------------------
-# 2. Tech Writer Agent
-# ---------------------------
+# ---------------- Tech Writer ----------------
 tech_prompt = PromptTemplate.from_template(
     """
-Write a professional LinkedIn post in {language} about a technology topic.
+Write a LinkedIn post in {language} about: {topic}
 
-Topic: {topic}
-
-Requirements:
-- 2 to 4 short paragraphs
-- Professional and engaging tone
-- Include insights or trends
-- End with a thoughtful question or call-to-action
+- 2 to 4 paragraphs
+- Professional tone
+- End with question or CTA
 """
 )
 
 tech_chain = tech_prompt | llm | StrOutputParser()
 
-# ---------------------------
-# 3. General Writer Agent
-# ---------------------------
+# ---------------- General Writer ----------------
 general_prompt = PromptTemplate.from_template(
     """
-Write a professional LinkedIn post in {language} about a general topic.
+Write a LinkedIn post in {language} about: {topic}
 
-Topic: {topic}
-
-Requirements:
-- 2 to 4 short paragraphs
-- Professional and engaging tone
-- Relatable and thoughtful
-- End with a question or call-to-action
+- 2 to 4 paragraphs
+- Professional tone
+- End with question or CTA
 """
 )
 
 general_chain = general_prompt | llm | StrOutputParser()
 
-# ---------------------------
-# 4. Conditional Routing
-# ---------------------------
-def route(info):
-    topic = info["topic"]
-    category = router_chain.invoke({"topic": topic}).strip().lower()
+
+# ---------------- Request Model ----------------
+class PostRequest(BaseModel):
+    topic: str
+    language: str
+
+
+# ---------------- API Route ----------------
+@app.post("/generate-post")
+def generate_post(req: PostRequest):
+
+    category = router_chain.invoke({"topic": req.topic}).lower()
 
     if "tech" in category:
-        return tech_chain
+        result = tech_chain.invoke({
+            "topic": req.topic,
+            "language": req.language
+        })
     else:
-        return general_chain
+        result = general_chain.invoke({
+            "topic": req.topic,
+            "language": req.language
+        })
 
-
-final_chain = RunnableBranch(
-    (lambda x: "tech" in router_chain.invoke({"topic": x["topic"]}).lower(), tech_chain),
-    general_chain
-)
-
-# ---------------------------
-# 5. Main Function
-# ---------------------------
-def generate_post(topic, language):
-    result = final_chain.invoke({
-        "topic": topic,
-        "language": language
-    })
-    return result
-
-
-# ---------------------------
-# 6. Run Examples
-# ---------------------------
-if __name__ == "__main__":
-    print("\n--- Tech Example (English) ---\n")
-    print(generate_post("AI in Healthcare", "English"))
-
-    print("\n--- General Example (Bengali) ---\n")
-    print(generate_post("Remote Work Productivity", "Bengali"))
+    return {
+        "topic": req.topic,
+        "category": category,
+        "post": result
+    }
